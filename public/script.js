@@ -8247,8 +8247,8 @@ export async function getChatsFromFiles(data, isGroupChat) {
                 });
 
                 if (!chatResponse.ok) {
-                    return res();
-                    // continue;
+                    res();
+                    return;
                 }
 
                 const currentChat = await chatResponse.json();
@@ -8262,7 +8262,7 @@ export async function getChatsFromFiles(data, isGroupChat) {
                 console.error(error);
             }
 
-            return res();
+            res();
         });
     });
 
