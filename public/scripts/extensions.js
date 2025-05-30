@@ -428,6 +428,18 @@ async function activateExtensions() {
 
                 addExtensionScript(name, manifest); // This now defines manifest.loadModule
 
+                // NEW part to ensure parent module for 'gallery' is loaded and stored:
+                if (manifest.js && name === 'gallery') { // Target 'gallery' or use a manifest flag
+                    if (manifests[name] && typeof manifests[name].loadModule === 'function' && !manifests[name].parentModule) {
+                        manifests[name].loadModule().then(module => {
+                            manifests[name].parentModule = module;
+                            console.log(`Parent module for '${name}' stored for direct calls:`, module);
+                        }).catch(err => {
+                            console.error(`Error loading parent module for '${name}' for direct calls:`, err);
+                        });
+                    }
+                }
+
                 const panelSelector = EXTENSION_UI_PANELS[name];
                 const panelElement = panelSelector ? document.querySelector(panelSelector) : null;
 
@@ -450,6 +462,8 @@ async function activateExtensions() {
                                     iframe.style.height = '100%';
                                     iframe.style.border = 'none';
                                     iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+                                    const csp = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; require-trusted-types-for 'script';";
+                                    iframe.setAttribute('csp', csp);
                                     panelElement.appendChild(iframe);
                                     // activeExtensions.add(name); // Moved to be set upon receiving 'extensionLoaded' message from iframe
                                 } else {
@@ -1654,35 +1668,55 @@ export async function initExtensions() {
                     break;
                 case 'galleryImageClicked': // Handle image click from gallery iframe
                     console.log('[Parent] Received galleryImageClicked from iframe:', data);
-                    if (typeof window.galleryViewWithDragbox === 'function') {
-                        // viewWithDragbox expects an array of items, each with a responsiveURL method.
-                        window.galleryViewWithDragbox([{ responsiveURL: () => data.imageUrl }]);
+                    const galleryParentModuleImgClick = manifests['gallery']?.parentModule;
+                    if (galleryParentModuleImgClick && typeof galleryParentModuleImgClick.viewWithDragbox === 'function') {
+                        galleryParentModuleImgClick.viewWithDragbox([{ responsiveURL: () => data.imageUrl }]);
+                        performance.mark('galleryImageClickEnd');
+                        performance.measure('Gallery Image Click Roundtrip', 'galleryImageClickStart', 'galleryImageClickEnd');
+                        const measureClickRT = performance.getEntriesByName('Gallery Image Click Roundtrip').pop();
+                        if (measureClickRT) {
+                            console.debug(`Gallery Image Click Roundtrip took: ${measureClickRT.duration.toFixed(2)} ms`);
+                        }
+                        performance.clearMarks('galleryImageClickStart');
+                        performance.clearMarks('galleryImageClickEnd');
+                        performance.clearMeasures('Gallery Image Click Roundtrip');
                     } else {
-                        console.error('[Parent] window.galleryViewWithDragbox is not defined. Make sure gallery/index.js exposes it.');
+                        console.error('[Parent] galleryParentModule.viewWithDragbox is not available. Module:', galleryParentModuleImgClick);
+                        toastr.error('Could not open gallery image.');
                     }
                     break;
                 case 'galleryFilesDropped':
                     console.log('[Parent] Received galleryFilesDropped from iframe:', data.files?.length, 'files for URL', data.galleryUrl);
-                    if (typeof window.galleryUploadFile === 'function' && typeof window.galleryShowCharGallery === 'function') {
+                    const galleryParentModuleDrop = manifests['gallery']?.parentModule;
+                    if (galleryParentModuleDrop && typeof galleryParentModuleDrop.uploadFile === 'function' && typeof galleryParentModuleDrop.showCharGallery === 'function') {
                         const fileArray = data.files; // These should be File objects
                         if (fileArray && fileArray.length > 0) {
                             toastr.info(`Uploading ${fileArray.length} file(s)...`); // Inform user
-                            const uploadPromises = fileArray.map(file => window.galleryUploadFile(file, data.galleryUrl));
+                            const uploadPromises = fileArray.map(file => galleryParentModuleDrop.uploadFile(file, data.galleryUrl));
 
                             Promise.all(uploadPromises)
                                 .then(() => {
-                                    console.log('[Parent] All files uploaded successfully. Refreshing gallery for URL:', data.galleryUrl);
+                                    console.log('[Parent] All files uploaded successfully via parentModule. Refreshing gallery for URL:', data.galleryUrl);
                                     toastr.success('Uploads complete. Refreshing gallery...');
-                                    window.galleryShowCharGallery(data.galleryUrl);
+                                    galleryParentModuleDrop.showCharGallery(data.galleryUrl);
+                                    performance.mark('galleryFileDropEnd');
+                                    performance.measure('Gallery File Drop & Upload Roundtrip', 'galleryFileDropStart', 'galleryFileDropEnd');
+                                    const measureDropRT = performance.getEntriesByName('Gallery File Drop & Upload Roundtrip').pop();
+                                    if (measureDropRT) {
+                                        console.debug(`Gallery File Drop & Upload Roundtrip took: ${measureDropRT.duration.toFixed(2)} ms`);
+                                    }
+                                    performance.clearMarks('galleryFileDropStart');
+                                    performance.clearMarks('galleryFileDropEnd');
+                                    performance.clearMeasures('Gallery File Drop & Upload Roundtrip');
                                 })
                                 .catch(err => {
-                                    console.error('[Parent] Error during file uploads:', err);
+                                    console.error('[Parent] Error during file uploads via parentModule:', err);
                                     toastr.error('An error occurred during upload. Some files may not have been saved.');
                                 });
                         }
                     } else {
-                        console.error('[Parent] window.galleryUploadFile or window.galleryShowCharGallery is not defined on the parent page.');
-                        toastr.error('Gallery upload/refresh functions not available.');
+                        console.error('[Parent] galleryParentModule.uploadFile or .showCharGallery is not available. Module:', galleryParentModuleDrop);
+                        toastr.error('Gallery upload/refresh module functions not available.');
                     }
                     break;
                 case 'extensionApiRequest': // Example: if iframe needs to make an API call via parent

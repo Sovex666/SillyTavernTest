@@ -574,6 +574,8 @@ async function listGalleryCommand(args) {
     );
 })();
 
-window.galleryViewWithDragbox = viewWithDragbox;
-window.galleryUploadFile = uploadFile;
-window.galleryShowCharGallery = showCharGallery;
+// window.galleryViewWithDragbox = viewWithDragbox; // No longer needed, will be exported
+// window.galleryUploadFile = uploadFile; // No longer needed, will be exported
+// window.galleryShowCharGallery = showCharGallery; // No longer needed, will be exported
+
+export { viewWithDragbox, uploadFile, showCharGallery };

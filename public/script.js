@@ -2873,17 +2873,20 @@ function formatGenerationTimer(gen_started, gen_finished, tokenCount, reasoningD
 
 export function scrollChatToBottom() {
     if (power_user.auto_scroll_chat_to_bottom) {
-        let position = chatElement[0].scrollHeight;
+        // Ensure chatScrollContainer is defined, defaulting to chatElement if not (for safety during transition)
+        const container = chatScrollContainer || chatElement;
+        let position = container[0].scrollHeight;
 
         if (power_user.waifuMode) {
-            const lastMessage = chatElement.find('.mes').last();
-            if (lastMessage.length) {
-                const lastMessagePosition = lastMessage.position().top;
-                position = chatElement.scrollTop() + lastMessagePosition;
+            // visibleMessagesContainer should be used here
+            const lastMessage = (visibleMessagesContainer || container).find('.mes').last();
+            if (lastMessage.length && typeof lastMessage.position === 'function' && lastMessage[0].offsetTop !== undefined) {
+                // Scroll to the top of the last message plus its height, within the scroll container
+                // Simpler: just scroll to the bottom of the container:
+                position = container[0].scrollHeight;
             }
         }
-
-        chatElement.scrollTop(position);
+        container.scrollTop(position);
     }
 }
 
@@ -6553,7 +6556,7 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
     }
 
     // Coerce null/undefined to empty string
-    if (chat.length && !chat[chat.length - 1]['extra']['reasoning']) {
+    if (chat.length && chat[chat.length - 1] && chat[chat.length - 1]['extra'] && !chat[chat.length - 1]['extra']['reasoning']) {
         chat[chat.length - 1]['extra']['reasoning'] = '';
     }
 
@@ -6562,6 +6565,14 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
     }
 
     let oldMessage = '';
+    let scrolledToBottomBeforeUpdate = false;
+    const scrollThreshold = 20; // pixels
+
+    // Determine if scrolled to bottom BEFORE new message is logically added and UI updates
+    // Applicable for 'normal' new messages and potentially others if they aren't from scroll/history
+    if (type !== 'swipe' && type !== 'append' && type !== 'continue' && type !== 'appendFinal' && chatScrollContainer && chatScrollContainer.length) {
+        scrolledToBottomBeforeUpdate = chatScrollContainer.scrollTop() + chatScrollContainer.innerHeight() >= chatScrollContainer.prop('scrollHeight') - scrollThreshold;
+    }
     const generationFinished = new Date();
     const parsedImage = extractImageFromMessage(getMessage);
     getMessage = parsedImage.getMessage;
@@ -6585,7 +6596,9 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
             }
             const chat_id = (chat.length - 1);
             await eventSource.emit(event_types.MESSAGE_RECEIVED, chat_id, type);
-            addOneMessage(chat[chat_id], { type: 'swipe' });
+            // addOneMessage(chat[chat_id], { type: 'swipe' }); // Replaced by updateVisibleMessages
+            updateVisibleMessages();
+            if (scrolledToBottomBeforeUpdate && chatScrollContainer) chatScrollContainer.scrollTop(chatScrollContainer.prop('scrollHeight'));
             await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, chat_id, type);
         } else {
             chat[chat.length - 1]['mes'] = getMessage;
@@ -6609,7 +6622,9 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         }
         const chat_id = (chat.length - 1);
         await eventSource.emit(event_types.MESSAGE_RECEIVED, chat_id, type);
-        addOneMessage(chat[chat_id], { type: 'swipe' });
+        // addOneMessage(chat[chat_id], { type: 'swipe' }); // Replaced by updateVisibleMessages
+        updateVisibleMessages();
+        if (scrolledToBottomBeforeUpdate && chatScrollContainer) chatScrollContainer.scrollTop(chatScrollContainer.prop('scrollHeight'));
         await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, chat_id, type);
     } else if (type === 'appendFinal') {
         oldMessage = chat[chat.length - 1]['mes'];
@@ -6630,7 +6645,9 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         }
         const chat_id = (chat.length - 1);
         await eventSource.emit(event_types.MESSAGE_RECEIVED, chat_id, type);
-        addOneMessage(chat[chat_id], { type: 'swipe' });
+        // addOneMessage(chat[chat_id], { type: 'swipe' }); // Replaced by updateVisibleMessages
+        updateVisibleMessages();
+        if (scrolledToBottomBeforeUpdate && chatScrollContainer) chatScrollContainer.scrollTop(chatScrollContainer.prop('scrollHeight'));
         await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, chat_id, type);
 
     } else {
@@ -6672,7 +6689,9 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         const chat_id = (chat.length - 1);
 
         !fromStreaming && await eventSource.emit(event_types.MESSAGE_RECEIVED, chat_id, type);
-        addOneMessage(chat[chat_id]);
+        // addOneMessage(chat[chat_id]); // Replaced by updateVisibleMessages
+        updateVisibleMessages();
+        if (scrolledToBottomBeforeUpdate && chatScrollContainer) chatScrollContainer.scrollTop(chatScrollContainer.prop('scrollHeight'));
         !fromStreaming && await eventSource.emit(event_types.CHARACTER_MESSAGE_RENDERED, chat_id, type);
     }
 

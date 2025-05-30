@@ -32,6 +32,7 @@
         if (item && typeof item.responsiveURL === 'function') {
             const imageUrl = item.responsiveURL();
             if (window.parentApi && typeof window.parentApi.sendMessage === 'function') {
+                performance.mark('galleryImageClickStart');
                 window.parentApi.sendMessage({
                     type: 'galleryImageClicked',
                     imageUrl: imageUrl,
@@ -50,6 +51,7 @@
         console.log('[Gallery Iframe] Message received from parent:', event.data);
 
         if (event.data && event.data.type === 'initGallery') {
+            performance.mark('galleryInternalInitStart');
             const { items, url } = event.data;
             const galleryTargetId = 'nanogallery_target_in_iframe'; // Matches the div in extension_iframe_loader.html
 
@@ -105,6 +107,16 @@
                 console.log('[Gallery Iframe] nanogallery2 initialized.');
                 currentGalleryUrlForUpload = url; // Store the URL for D&D uploads
 
+                performance.mark('galleryInternalInitEnd');
+                performance.measure('Gallery Iframe Init', 'galleryInternalInitStart', 'galleryInternalInitEnd');
+                const measureIframeInit = performance.getEntriesByName('Gallery Iframe Init').pop();
+                if (measureIframeInit) {
+                    console.debug(`Gallery Iframe Init took: ${measureIframeInit.duration.toFixed(2)} ms`);
+                }
+                performance.clearMarks('galleryInternalInitStart');
+                performance.clearMarks('galleryInternalInitEnd');
+                performance.clearMeasures('Gallery Iframe Init');
+
                 if (window.parentApi && typeof window.parentApi.sendMessage === 'function') {
                     window.parentApi.sendMessage({ type: 'galleryRendered', name: 'gallery', status: 'success' });
                 } else {
@@ -145,6 +157,7 @@
             if (files.length > 0) {
                 const filesArray = Array.from(files); // Convert FileList to array
                 if (window.parentApi && typeof window.parentApi.sendMessage === 'function') {
+                    performance.mark('galleryFileDropStart');
                     window.parentApi.sendMessage({
                         type: 'galleryFilesDropped',
                         files: filesArray, // Sending File objects
