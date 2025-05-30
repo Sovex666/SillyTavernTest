@@ -731,7 +731,7 @@ async function summarizeChatMain(context, force, skipWIAN) {
  * @returns {Promise<{rawPrompt: string, lastUsedIndex: number}>} Raw summarization prompt
  */
 async function getRawSummaryPrompt(context, prompt) {
-    const summarizerWorker = new Worker('extensions/memory/summarizer-worker.js');
+    const summarizerWorker = new Worker('./summarizer-worker.js');
 
     // latestSummaryIndex needs to be determined before filtering messagesToProcess
     const latestSummaryIndex = getIndexOfLatestChatSummary(context.chat);

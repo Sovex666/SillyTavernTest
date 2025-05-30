@@ -632,7 +632,7 @@ export const DEFAULT_SAVE_EDIT_TIMEOUT = debounce_timeout.relaxed;
 export const DEFAULT_PRINT_TIMEOUT = debounce_timeout.quick;
 
 export const saveSettingsDebounced = debounce((loopCounter = 0) => saveSettings(loopCounter), DEFAULT_SAVE_EDIT_TIMEOUT);
-export const saveCharacterDebounced = debounce(() => $('#create_button').trigger('click'), DEFAULT_SAVE_EDIT_TIMEOUT);
+export const saveCharacterDebounced = debounce(() => $('#create_button').trigger('click'), debounce_timeout.short);
 
 /**
  * Prints the character list in a debounced fashion without blocking, with a delay of 100 milliseconds.
@@ -830,24 +830,53 @@ function updateVisibleMessages() {
 
     batchAppender.commit();
 
-    // Update spacer heights
+    // Dynamically update averageMessageHeight
+    const renderedMessages = visibleMessagesContainer.children('.mes');
+    const numberOfRenderedMessages = renderedMessages.length;
+    let totalHeightOfRenderedMessages = 0;
+    if (numberOfRenderedMessages > 0) {
+        renderedMessages.each(function() {
+            totalHeightOfRenderedMessages += $(this).outerHeight(true); // Include margin
+        });
+
+        if (totalHeightOfRenderedMessages > 0) {
+            const currentBatchAverageHeight = totalHeightOfRenderedMessages / numberOfRenderedMessages;
+            // More aggressive update if it's the initial calculation or drastically different
+            if (averageMessageHeight === 60 || Math.abs(averageMessageHeight - currentBatchAverageHeight) > averageMessageHeight * 0.5) {
+                averageMessageHeight = currentBatchAverageHeight;
+            } else {
+                averageMessageHeight = (averageMessageHeight * 0.7) + (currentBatchAverageHeight * 0.3);
+            }
+            averageMessageHeight = Math.max(20, averageMessageHeight); // Ensure a minimum height
+            console.log('Updated averageMessageHeight:', averageMessageHeight);
+        }
+    }
+
+    // Update spacer heights using the potentially updated averageMessageHeight
     const topSpacerHeight = renderStartIndex * averageMessageHeight;
-    const bottomSpacerHeight = (chat.length - 1 - renderEndIndex) * averageMessageHeight;
+    const bottomSpacerHeight = Math.max(0, (chat.length - 1 - renderEndIndex)) * averageMessageHeight; // Ensure bottom spacer isn't negative
 
     topSpacer.height(topSpacerHeight);
     bottomSpacer.height(bottomSpacerHeight);
 
-    console.log(`Top spacer: ${topSpacerHeight}px, Bottom spacer: ${bottomSpacerHeight}px, Rendered: ${renderEndIndex - renderStartIndex + 1} messages`);
+    console.log(`Top spacer: ${topSpacerHeight}px, Bottom spacer: ${bottomSpacerHeight}px, Rendered: ${numberOfRenderedMessages} messages`);
 
     // Handle .last_mes class and swipe buttons
-    visibleMessagesContainer.find('.mes').removeClass('last_mes');
-    const lastVisibleMessage = visibleMessagesContainer.find('.mes').last();
-    if (lastVisibleMessage.length && parseInt(lastVisibleMessage.attr('mesid')) === chat.length - 1) {
-        lastVisibleMessage.addClass('last_mes');
+    // visibleMessagesContainer.find('.mes').removeClass('last_mes'); // This is handled by addOneMessage logic or should be centralized after batch append
+    visibleMessagesContainer.find('.mes').removeClass('last_mes'); // Clear all first
+    const lastMessageInChat = chat.length - 1;
+    const lastVisibleMessageElement = visibleMessagesContainer.find(`.mes[mesid="${lastMessageInChat}"]`);
+
+    if (lastVisibleMessageElement.length) {
+        lastVisibleMessageElement.addClass('last_mes');
+    } else {
+        // If the actual last message isn't visible, but the last rendered one is the one before it,
+        // we might need to ensure no .last_mes class is present if that's the desired behavior.
+        // For now, only adding .last_mes if the true last message is rendered.
     }
 
     hideSwipeButtons(); // Hide all first
-    showSwipeButtons(); // Then show for the actual last message if it's rendered
+    showSwipeButtons(); // Then show for the actual last message if it's rendered and it is indeed the last one.
 }
 
 // Register configuration migrations
@@ -4244,6 +4273,69 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         coreChat.pop();
     }
 
+    // Chat History Summarization Pipeline
+    const SUMMARY_THRESHOLD_MESSAGES = 20; // Number of recent messages to keep verbatim
+    const SUMMARY_MIN_MESSAGES_TO_SUMMARIZE = 10; // Minimum number of older messages to trigger a new summary
+
+    let currentSummary = chat_metadata.summary;
+    let summaryTextToShow = '';
+
+    let messagesToSummarize = [];
+    let verbatimMessages = [];
+
+    const summaryCutoffIndex = Math.max(0, coreChat.length - SUMMARY_THRESHOLD_MESSAGES);
+
+    if (coreChat.length > SUMMARY_THRESHOLD_MESSAGES + SUMMARY_MIN_MESSAGES_TO_SUMMARIZE) {
+        messagesToSummarize = coreChat.slice(0, summaryCutoffIndex);
+        verbatimMessages = coreChat.slice(summaryCutoffIndex);
+    } else {
+        verbatimMessages = coreChat; // Not enough messages to warrant summarization yet
+    }
+
+    let lastMessageIdInSummarizeBatch = messagesToSummarize.length > 0 ? messagesToSummarize[messagesToSummarize.length - 1].id || chat.indexOf(messagesToSummarize[messagesToSummarize.length - 1]) : -1;
+    if (lastMessageIdInSummarizeBatch === -1 && messagesToSummarize.length > 0) { // Fallback for messages without explicit id
+        lastMessageIdInSummarizeBatch = coreChat.indexOf(messagesToSummarize[messagesToSummarize.length - 1]);
+    }
+
+
+    let needsNewSummary = false;
+    if (messagesToSummarize.length >= SUMMARY_MIN_MESSAGES_TO_SUMMARIZE) {
+        if (!currentSummary || !currentSummary.text || currentSummary.summarized_until_mes_id < lastMessageIdInSummarizeBatch) {
+            needsNewSummary = true;
+        } else {
+            summaryTextToShow = currentSummary.text; // Use existing, fresh summary
+            console.log("Using existing summary, summarized up to message ID:", currentSummary.summarized_until_mes_id);
+        }
+    }
+
+    if (needsNewSummary) {
+        const summarizationPromptText = "Concisely summarize the following portion of our conversation to maintain context for future interactions. Focus on key facts, decisions, and the overall emotional tone. The summary should be in the third person from an observer's perspective:\n\n" + messagesToSummarize.map(m => `${m.name}: ${m.mes}`).join('\n');
+        console.log("Summarizing messages from ID 0 to " + lastMessageIdInSummarizeBatch);
+        try {
+            const summaryResponse = await generateQuietPrompt(summarizationPromptText, false, true, null, 'SummaryGenerator', 200);
+            if (summaryResponse && summaryResponse.trim() !== "") {
+                summaryTextToShow = summaryResponse.trim();
+                chat_metadata.summary = { text: summaryTextToShow, summarized_until_mes_id: lastMessageIdInSummarizeBatch };
+                console.log("New summary generated: ", summaryTextToShow);
+                saveChatDebounced(); // Save chat metadata with new summary
+            } else {
+                console.warn("Summarization call returned empty or failed. Using existing summary if available.");
+                summaryTextToShow = currentSummary ? currentSummary.text : '';
+            }
+        } catch (summarizationError) {
+            console.error("Error during summarization: ", summarizationError);
+            summaryTextToShow = currentSummary ? currentSummary.text : ''; // Fallback to old summary
+        }
+    }
+
+    let finalCoreChat = [];
+    if (summaryTextToShow) {
+        finalCoreChat.push({ name: "Summary", mes: `[Previous conversation summary: ${summaryTextToShow}]`, is_system: true, is_user: false, id: 'summary_0' });
+    }
+    finalCoreChat = finalCoreChat.concat(verbatimMessages);
+    coreChat = finalCoreChat; // Replace original coreChat
+    }
+
     coreChat = await Promise.all(coreChat.map(async (chatItem, index) => {
         let message = chatItem.mes;
         let regexType = chatItem.is_user ? regex_placement.USER_INPUT : regex_placement.AI_OUTPUT;
@@ -7165,15 +7257,33 @@ export async function saveChat({ chatName, withMetadata, mesId, force = false } 
         ...trimmedChat,
     ];
 
+    let serializerWorker;
     try {
+        serializerWorker = new Worker('/scripts/serializer-worker.js');
+        const stringifiedChat = await new Promise((resolve, reject) => {
+            serializerWorker.onmessage = (event) => {
+                if (event.data.task === 'stringify') {
+                    if (event.data.result) {
+                        resolve(event.data.result);
+                    } else {
+                        reject(new Error(event.data.error || 'Serialization failed'));
+                    }
+                }
+            };
+            serializerWorker.onerror = (err) => {
+                reject(new Error(err.message || 'Worker error during serialization'));
+            };
+            serializerWorker.postMessage({ task: 'stringify', data: chatToSave });
+        });
+
         const result = await fetch('/api/chats/save', {
             method: 'POST',
             cache: 'no-cache',
             headers: getRequestHeaders(),
-            body: JSON.stringify({
+            body: JSON.stringify({ // body is still JSON.stringify because the payload to /api/chats/save is an object
                 ch_name: characters[this_chid].name,
                 file_name: fileName,
-                chat: chatToSave,
+                chat: stringifiedChat, // The stringified chat history is a field within the overall JSON payload
                 avatar_url: characters[this_chid].avatar,
                 force: force,
             }),
@@ -7209,6 +7319,10 @@ export async function saveChat({ chatName, withMetadata, mesId, force = false } 
     } catch (error) {
         console.error(error);
         toastr.error(t`Check the server connection and reload the page to prevent data loss.`, t`Chat could not be saved`);
+    } finally {
+        if (serializerWorker) {
+            serializerWorker.terminate();
+        }
     }
 }
 
@@ -7381,6 +7495,7 @@ export async function getChat() {
             chat.splice(0, chat.length, ...response);
             chat_create_date = chat[0]['create_date'];
             chat_metadata = chat[0]['chat_metadata'] ?? {};
+            if (chat_metadata.summary) { console.log("Loaded chat with existing summary:", chat_metadata.summary); }
 
             chat.shift();
         } else {
@@ -7844,51 +7959,82 @@ export async function saveSettings(loopCounter = 0) {
     }
 
     //console.log('Entering settings with name1 = '+name1);
-    return jQuery.ajax({
-        type: 'POST',
-        url: '/api/settings/save',
-        data: JSON.stringify({
-            firstRun: firstRun,
-            accountStorage: accountStorage.getState(),
-            currentVersion: currentVersion,
-            username: name1,
-            active_character: active_character,
-            active_group: active_group,
-            api_server: api_server,
-            preset_settings: preset_settings,
-            user_avatar: user_avatar,
-            amount_gen: amount_gen,
-            max_context: max_context,
-            main_api: main_api,
-            world_info_settings: getWorldInfoSettings(),
-            textgenerationwebui_settings: textgen_settings,
-            swipes: swipes,
-            horde_settings: horde_settings,
-            power_user: power_user,
-            extension_settings: extension_settings,
-            tags: tags,
-            tag_map: tag_map,
-            nai_settings: nai_settings,
-            kai_settings: kai_settings,
-            oai_settings: oai_settings,
-            background: background_settings,
-            proxies: proxies,
-            selected_proxy: selected_proxy,
-        }, null, 4),
-        beforeSend: function () { },
-        cache: false,
-        dataType: 'json',
-        contentType: 'application/json',
-        //processData: false,
-        success: async function (data) {
-            eventSource.emit(event_types.SETTINGS_UPDATED);
-        },
-        error: function (jqXHR, exception) {
-            toastr.error(t`Check the server connection and reload the page to prevent data loss.`, t`Settings could not be saved`);
-            console.log(exception);
-            console.log(jqXHR);
-        },
-    });
+    const settingsObjectToSerialize = {
+        firstRun: firstRun,
+        accountStorage: accountStorage.getState(),
+        currentVersion: currentVersion,
+        username: name1,
+        active_character: active_character,
+        active_group: active_group,
+        api_server: api_server,
+        preset_settings: preset_settings,
+        user_avatar: user_avatar,
+        amount_gen: amount_gen,
+        max_context: max_context,
+        main_api: main_api,
+        world_info_settings: getWorldInfoSettings(),
+        textgenerationwebui_settings: textgen_settings,
+        swipes: swipes,
+        horde_settings: horde_settings,
+        power_user: power_user,
+        extension_settings: extension_settings,
+        tags: tags,
+        tag_map: tag_map,
+        nai_settings: nai_settings,
+        kai_settings: kai_settings,
+        oai_settings: oai_settings,
+        background: background_settings,
+        proxies: proxies,
+        selected_proxy: selected_proxy,
+    };
+
+    let serializerWorker;
+    try {
+        serializerWorker = new Worker('/scripts/serializer-worker.js');
+        const stringifiedSettings = await new Promise((resolve, reject) => {
+            serializerWorker.onmessage = (event) => {
+                if (event.data.task === 'stringify') {
+                    if (event.data.result) {
+                        resolve(event.data.result);
+                    } else {
+                        reject(new Error(event.data.error || 'Serialization failed'));
+                    }
+                }
+            };
+            serializerWorker.onerror = (err) => {
+                reject(new Error(err.message || 'Worker error during settings serialization'));
+            };
+            serializerWorker.postMessage({ task: 'stringify', data: settingsObjectToSerialize });
+        });
+
+        return jQuery.ajax({
+            type: 'POST',
+            url: '/api/settings/save',
+            data: stringifiedSettings, // Use the stringified settings from the worker
+            beforeSend: function () { },
+            cache: false,
+            dataType: 'json',
+            contentType: 'application/json',
+            //processData: false,
+            success: async function (data) {
+                eventSource.emit(event_types.SETTINGS_UPDATED);
+            },
+            error: function (jqXHR, exception) {
+                toastr.error(t`Check the server connection and reload the page to prevent data loss.`, t`Settings could not be saved`);
+                console.log(exception);
+                console.log(jqXHR);
+            },
+        });
+    } catch (error) {
+        toastr.error(t`Failed to serialize settings. Check console for details.`, t`Settings could not be saved`);
+        console.error("Error during settings serialization or save:", error);
+        // Decide if you want to return a rejected promise or handle it differently
+        return Promise.reject(error);
+    } finally {
+        if (serializerWorker) {
+            serializerWorker.terminate();
+        }
+    }
 }
 
 /**
