@@ -428,6 +428,18 @@ async function activateExtensions() {
 
                 addExtensionScript(name, manifest); // This now defines manifest.loadModule
 
+                // NEW part to ensure parent module for 'gallery' is loaded and stored:
+                if (manifest.js && name === 'gallery') { // Target 'gallery' or use a manifest flag
+                    if (manifests[name] && typeof manifests[name].loadModule === 'function' && !manifests[name].parentModule) {
+                        manifests[name].loadModule().then(module => {
+                            manifests[name].parentModule = module;
+                            console.log(`Parent module for '${name}' stored for direct calls:`, module);
+                        }).catch(err => {
+                            console.error(`Error loading parent module for '${name}' for direct calls:`, err);
+                        });
+                    }
+                }
+
                 const panelSelector = EXTENSION_UI_PANELS[name];
                 const panelElement = panelSelector ? document.querySelector(panelSelector) : null;
 
@@ -435,16 +447,38 @@ async function activateExtensions() {
                     const observer = new IntersectionObserver((entries, obs) => {
                         entries.forEach(entry => {
                             if (entry.isIntersecting) {
-                                console.log(`Panel for extension '${name}' is now visible. Loading module.`);
-                                if (manifests[name] && typeof manifests[name].loadModule === 'function') {
-                                    manifests[name].loadModule().then(module => {
-                                        console.log(`Extension '${name}' loaded successfully.`);
-                                        activeExtensions.add(name); // Mark as active after successful load
-                                        // Optional: if extensions export an init function, call it here.
-                                        // if (module && typeof module.init === 'function') { module.init(); }
-                                    }).catch(err => {
-                                        console.error(`Error loading extension '${name}':`, err);
-                                    });
+                                // START MODIFIED SECTION FOR SANDBOXED UI
+                                // The 'gallery' specific check is removed, now relies on manifest.sandboxedUI
+                                if (manifest.sandboxedUI === true && (manifest.iframeScript || manifest.js)) {
+                                    console.log(`Panel for SANDBOXED extension '${name}' is now visible. Loading iframe.`);
+                                    panelElement.innerHTML = ''; // Clear existing content
+                                    const iframe = document.createElement('iframe');
+                                    const actualEntrypoint = manifest.iframeScript || manifest.js;
+                                    const entryPointUrl = actualEntrypoint.startsWith('/') ? actualEntrypoint : `/scripts/extensions/${name}/${actualEntrypoint}`;
+                                    // Assuming extension_iframe_loader.html is in the public root.
+                                    const iframeLoaderPath = '/extension_iframe_loader.html';
+                                    iframe.src = `${iframeLoaderPath}?extensionName=${name}&extensionEntrypoint=${encodeURIComponent(entryPointUrl)}`;
+                                    iframe.style.width = '100%';
+                                    iframe.style.height = '100%';
+                                    iframe.style.border = 'none';
+                                    iframe.setAttribute('sandbox', 'allow-scripts allow-same-origin');
+                                    const csp = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; require-trusted-types-for 'script';";
+                                    iframe.setAttribute('csp', csp);
+                                    panelElement.appendChild(iframe);
+                                    // activeExtensions.add(name); // Moved to be set upon receiving 'extensionLoaded' message from iframe
+                                } else {
+                                // END MODIFIED SECTION FOR SANDBOXED UI
+                                    console.log(`Panel for extension '${name}' is now visible. Loading module.`);
+                                    if (manifests[name] && typeof manifests[name].loadModule === 'function') {
+                                        manifests[name].loadModule().then(module => {
+                                            console.log(`Extension '${name}' loaded successfully.`);
+                                            activeExtensions.add(name); // Mark as active after successful load
+                                            // Optional: if extensions export an init function, call it here.
+                                            // if (module && typeof module.init === 'function') { module.init(); }
+                                        }).catch(err => {
+                                            console.error(`Error loading extension '${name}':`, err);
+                                        });
+                                    }
                                 }
                                 obs.unobserve(panelElement);
                                 obs.disconnect();
@@ -1609,4 +1643,90 @@ export async function initExtensions() {
      * @listens #third_party_extension_button#click - The click event of the '#third_party_extension_button' element.
      */
     $('#third_party_extension_button').on('click', () => openThirdPartyExtensionMenu());
+
+    // Global listener for messages from iframes
+    window.addEventListener('message', (event) => {
+        // TODO: Add origin check for security if the iframe source is not strictly controlled
+        // For now, assuming same-origin or controlled sources due to local loading
+        // if (event.origin !== window.location.origin) {
+        //     console.warn("[Parent] Message received from untrusted origin:", event.origin);
+        //     return;
+        // }
+
+        const data = event.data;
+        console.log('[Parent] Received message from iframe:', data);
+
+        if (data && data.name && data.type) {
+            switch (data.type) {
+                case 'extensionLoaded':
+                    console.log(`[Parent] Extension ${data.name} reported loaded successfully in iframe.`);
+                    activeExtensions.add(data.name);
+                    // Potentially trigger other UI updates or logic now that the extension is confirmed loaded
+                    break;
+                case 'extensionLoadFailed':
+                    console.error(`[Parent] Extension ${data.name} reported load failure in iframe:`, data.error);
+                    break;
+                case 'galleryImageClicked': // Handle image click from gallery iframe
+                    console.log('[Parent] Received galleryImageClicked from iframe:', data);
+                    const galleryParentModuleImgClick = manifests['gallery']?.parentModule;
+                    if (galleryParentModuleImgClick && typeof galleryParentModuleImgClick.viewWithDragbox === 'function') {
+                        galleryParentModuleImgClick.viewWithDragbox([{ responsiveURL: () => data.imageUrl }]);
+                        performance.mark('galleryImageClickEnd');
+                        performance.measure('Gallery Image Click Roundtrip', 'galleryImageClickStart', 'galleryImageClickEnd');
+                        const measureClickRT = performance.getEntriesByName('Gallery Image Click Roundtrip').pop();
+                        if (measureClickRT) {
+                            console.debug(`Gallery Image Click Roundtrip took: ${measureClickRT.duration.toFixed(2)} ms`);
+                        }
+                        performance.clearMarks('galleryImageClickStart');
+                        performance.clearMarks('galleryImageClickEnd');
+                        performance.clearMeasures('Gallery Image Click Roundtrip');
+                    } else {
+                        console.error('[Parent] galleryParentModule.viewWithDragbox is not available. Module:', galleryParentModuleImgClick);
+                        toastr.error('Could not open gallery image.');
+                    }
+                    break;
+                case 'galleryFilesDropped':
+                    console.log('[Parent] Received galleryFilesDropped from iframe:', data.files?.length, 'files for URL', data.galleryUrl);
+                    const galleryParentModuleDrop = manifests['gallery']?.parentModule;
+                    if (galleryParentModuleDrop && typeof galleryParentModuleDrop.uploadFile === 'function' && typeof galleryParentModuleDrop.showCharGallery === 'function') {
+                        const fileArray = data.files; // These should be File objects
+                        if (fileArray && fileArray.length > 0) {
+                            toastr.info(`Uploading ${fileArray.length} file(s)...`); // Inform user
+                            const uploadPromises = fileArray.map(file => galleryParentModuleDrop.uploadFile(file, data.galleryUrl));
+
+                            Promise.all(uploadPromises)
+                                .then(() => {
+                                    console.log('[Parent] All files uploaded successfully via parentModule. Refreshing gallery for URL:', data.galleryUrl);
+                                    toastr.success('Uploads complete. Refreshing gallery...');
+                                    galleryParentModuleDrop.showCharGallery(data.galleryUrl);
+                                    performance.mark('galleryFileDropEnd');
+                                    performance.measure('Gallery File Drop & Upload Roundtrip', 'galleryFileDropStart', 'galleryFileDropEnd');
+                                    const measureDropRT = performance.getEntriesByName('Gallery File Drop & Upload Roundtrip').pop();
+                                    if (measureDropRT) {
+                                        console.debug(`Gallery File Drop & Upload Roundtrip took: ${measureDropRT.duration.toFixed(2)} ms`);
+                                    }
+                                    performance.clearMarks('galleryFileDropStart');
+                                    performance.clearMarks('galleryFileDropEnd');
+                                    performance.clearMeasures('Gallery File Drop & Upload Roundtrip');
+                                })
+                                .catch(err => {
+                                    console.error('[Parent] Error during file uploads via parentModule:', err);
+                                    toastr.error('An error occurred during upload. Some files may not have been saved.');
+                                });
+                        }
+                    } else {
+                        console.error('[Parent] galleryParentModule.uploadFile or .showCharGallery is not available. Module:', galleryParentModuleDrop);
+                        toastr.error('Gallery upload/refresh module functions not available.');
+                    }
+                    break;
+                case 'extensionApiRequest': // Example: if iframe needs to make an API call via parent
+                    console.log(`[Parent] Extension ${data.name} requests API call:`, data.request);
+                    // Handle the API request here, then postMessage the result back if needed
+                    // Example: forwardToBackend(data.name, data.request).then(response => iframe.contentWindow.postMessage({type: 'apiResponse', ...}))
+                    break;
+                default:
+                    console.log(`[Parent] Unknown message type from extension ${data.name}: ${data.type}`);
+            }
+        }
+    });
 }

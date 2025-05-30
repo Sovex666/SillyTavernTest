@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Extension Loader</title>
+    <meta charset="UTF-8">
+</head>
+<body>
+    <div id="nanogallery_target_in_iframe" style="width:100%; height:100%; overflow: auto;"></div>
+    <script>
+        (async () => {
+            const params = new URLSearchParams(window.location.search);
+            const extensionName = params.get('extensionName');
+            const extensionEntrypoint = params.get('extensionEntrypoint');
+
+            console.log(`[IFRAME] Loading extension: ${extensionName}`);
+            console.log(`[IFRAME] Entrypoint: ${extensionEntrypoint}`);
+
+            // Basic API for the extension to communicate with the parent
+            window.parentApi = {
+                sendMessage: (message) => {
+                    // Include extensionName in all messages to help parent identify the source
+                    window.parent.postMessage({ extensionName, ...message }, '*');
+                }
+            };
+
+            if (extensionEntrypoint) {
+                try {
+                    const extensionModule = await import(extensionEntrypoint);
+                    // Extensions might have an init function or just execute code upon import
+                    if (extensionModule && typeof extensionModule.initialize === 'function') {
+                        // Pass parentApi to the extension's initialize function if it expects it
+                        await extensionModule.initialize(window.parentApi);
+                        console.log(`[IFRAME] Extension ${extensionName} initialized via initialize function.`);
+                    } else {
+                        console.log(`[IFRAME] Extension ${extensionName} loaded (no initialize function found or executed).`);
+                    }
+                    window.parent.postMessage({ type: 'extensionLoaded', name: extensionName, status: 'success' }, '*');
+                } catch (error) {
+                    console.error(`[IFRAME] Error loading extension ${extensionName}:`, error);
+                    window.parent.postMessage({ type: 'extensionLoadFailed', name: extensionName, error: error.message, status: 'error' }, '*');
+                }
+            } else {
+                console.error('[IFRAME] Missing extensionEntrypoint parameter.');
+                window.parent.postMessage({ type: 'extensionLoadFailed', name: extensionName, error: 'Missing extensionEntrypoint parameter', status: 'error' }, '*');
+            }
+        })();
+    </script>
+</body>
+</html>

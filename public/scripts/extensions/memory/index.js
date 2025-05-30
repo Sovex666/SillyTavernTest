@@ -731,7 +731,7 @@ async function summarizeChatMain(context, force, skipWIAN) {
  * @returns {Promise<{rawPrompt: string, lastUsedIndex: number}>} Raw summarization prompt
  */
 async function getRawSummaryPrompt(context, prompt) {
-    const summarizerWorker = new Worker('extensions/memory/summarizer-worker.js');
+    const summarizerWorker = new Worker('./summarizer-worker.js');
 
     // latestSummaryIndex needs to be determined before filtering messagesToProcess
     const latestSummaryIndex = getIndexOfLatestChatSummary(context.chat);
@@ -750,10 +750,20 @@ async function getRawSummaryPrompt(context, prompt) {
         delimiter: '\n\n',
     };
 
+    performance.mark('summarizerWorkerStart');
     summarizerWorker.postMessage({ chatMessages: messagesToProcess, latestSummary, config: workerConfig });
 
     return new Promise((resolve, reject) => {
         summarizerWorker.onmessage = (e) => {
+            performance.mark('summarizerWorkerEnd');
+            performance.measure('Summarizer Worker Task', 'summarizerWorkerStart', 'summarizerWorkerEnd');
+            const measureSummarizer = performance.getEntriesByName('Summarizer Worker Task').pop();
+            if (measureSummarizer) {
+                console.debug(`Summarizer Worker Task took: ${measureSummarizer.duration.toFixed(2)} ms`);
+            }
+            performance.clearMarks('summarizerWorkerStart');
+            performance.clearMarks('summarizerWorkerEnd');
+            performance.clearMeasures('Summarizer Worker Task');
             resolve(e.data); // { rawPrompt, lastUsedIndex }
             summarizerWorker.terminate();
         };

@@ -4,27 +4,28 @@ import {
     characters,
     getRequestHeaders,
     event_types,
+    EXTENSION_UI_PANELS, // Assuming this is how it would be accessed if defined in script.js and exported
 } from '../../../script.js';
 import { groups, selected_group } from '../../group-chats.js';
-import { loadFileToDocument, delay, getBase64Async, getSanitizedFilename } from '../../utils.js';
+import { delay, getBase64Async, getSanitizedFilename } from '../../utils.js'; // Removed loadFileToDocument as it's no longer used here
 import { loadMovingUIState } from '../../power-user.js';
 import { dragElement } from '../../RossAscends-mods.js';
 import { SlashCommandParser } from '../../slash-commands/SlashCommandParser.js';
 import { SlashCommand } from '../../slash-commands/SlashCommand.js';
 import { ARGUMENT_TYPE, SlashCommandNamedArgument } from '../../slash-commands/SlashCommandArgument.js';
-import { DragAndDropHandler } from '../../dragdrop.js';
+// DragAndDropHandler is removed from here as the iframe will handle its own D&D
 import { commonEnumProviders } from '../../slash-commands/SlashCommandCommonEnumsProvider.js';
 import { t, translate } from '../../i18n.js';
 
 const extensionName = 'gallery';
-const extensionFolderPath = `scripts/extensions/${extensionName}/`;
-let firstTime = true;
+// const extensionFolderPath = `scripts/extensions/${extensionName}/`; // No longer needed for local asset loading
 
-// Exposed defaults for future tweaking
+// Exposed defaults for future tweaking (can be kept if makeMovable or other functions use them)
 let thumbnailHeight = 150;
 let paginationVisiblePages = 10;
 let paginationMaxLinesPerPage = 2;
 let galleryMaxRows = 3;
+
 
 // Remove all draggables associated with the gallery
 $('#movingDivs').on('click', '.dragClose', function () {
@@ -62,9 +63,6 @@ const defaultSettings = Object.freeze({
     sort: SORT.DATE_ASC.value,
 });
 
-/**
- * Initializes the settings for the gallery extension.
- */
 function initSettings() {
     let shouldSave = false;
     const context = SillyTavern.getContext();
@@ -83,22 +81,10 @@ function initSettings() {
     }
 }
 
-/**
- * Retrieves the gallery folder for a given character.
- * @param {import('../../char-data.js').v1CharData} char Character data
- * @returns {string} The gallery folder for the character
- */
 function getGalleryFolder(char) {
     return SillyTavern.getContext().extensionSettings.gallery.folders[char?.avatar] ?? char?.name;
 }
 
-/**
- * Retrieves a list of gallery items based on a given URL. This function calls an API endpoint
- * to get the filenames and then constructs the item list.
- *
- * @param {string} url - The base URL to retrieve the list of images.
- * @returns {Promise<Array>} - Resolves with an array of gallery item objects, rejects on error.
- */
 async function getGalleryItems(url) {
     const sortValue = getSortOrder();
     const sortObj = Object.values(SORT).find(it => it.value === sortValue) ?? SORT.DATE_ASC;
@@ -118,16 +104,12 @@ async function getGalleryItems(url) {
     const items = data.map((file) => ({
         src: `user/images/${url}/${file}`,
         srct: `user/images/${url}/${file}`,
-        title: '', // Optional title for each item
+        title: '',
     }));
 
     return items;
 }
 
-/**
- * Retrieves a list of gallery folders. This function calls an API endpoint
- * @returns {Promise<string[]>} - Resolves with an array of gallery folders.
- */
 async function getGalleryFolders() {
     try {
         const response = await fetch('/api/images/folders', {
@@ -146,173 +128,117 @@ async function getGalleryFolders() {
     }
 }
 
-/**
- * Sets the sort order for the gallery.
- * @param {string} order Sort order
- */
 function setSortOrder(order) {
     const context = SillyTavern.getContext();
     context.extensionSettings.gallery.sort = order;
     context.saveSettingsDebounced();
 }
 
-/**
- * Retrieves the current sort order for the gallery.
- * @returns {string} The current sort order for the gallery.
- */
 function getSortOrder() {
     return SillyTavern.getContext().extensionSettings.gallery.sort ?? defaultSettings.sort;
 }
 
-/**
- * Initializes a gallery using the provided items and sets up the drag-and-drop functionality.
- * It uses the nanogallery2 library to display the items and also initializes
- * event listeners to handle drag-and-drop of files onto the gallery.
- *
- * @param {Array<Object>} items - An array of objects representing the items to display in the gallery.
- * @param {string} url - The URL to use when a file is dropped onto the gallery for uploading.
- * @returns {Promise<void>} - Promise representing the completion of the gallery initialization.
- */
-async function initGallery(items, url) {
-    const nonce = `nonce-${Math.random().toString(36).substring(2, 15)}`;
-    const gallery = $('#dragGallery');
-    gallery.addClass(nonce);
-    gallery.nanogallery2({
-        'items': items,
-        thumbnailWidth: 'auto',
-        thumbnailHeight: thumbnailHeight,
-        paginationVisiblePages: paginationVisiblePages,
-        paginationMaxLinesPerPage: paginationMaxLinesPerPage,
-        galleryMaxRows: galleryMaxRows,
-        galleryPaginationTopButtons: false,
-        galleryNavigationOverlayButtons: true,
-        galleryTheme: {
-            navigationBar: { background: 'none', borderTop: '', borderBottom: '', borderRight: '', borderLeft: '' },
-            navigationBreadcrumb: { background: '#111', color: '#fff', colorHover: '#ccc', borderRadius: '4px' },
-            navigationFilter: { color: '#ddd', background: '#111', colorSelected: '#fff', backgroundSelected: '#111', borderRadius: '4px' },
-            navigationPagination: { background: '#111', color: '#fff', colorHover: '#ccc', borderRadius: '4px' },
-            thumbnail: { background: '#444', backgroundImage: 'linear-gradient(315deg, #111 0%, #445 90%)', borderColor: '#000', borderRadius: '0px', labelOpacity: 1, labelBackground: 'rgba(34, 34, 34, 0)', titleColor: '#fff', titleBgColor: 'transparent', titleShadow: '', descriptionColor: '#ccc', descriptionBgColor: 'transparent', descriptionShadow: '', stackBackground: '#aaa' },
-            thumbnailIcon: { padding: '5px', color: '#fff', shadow: '' },
-            pagination: { background: '#181818', backgroundSelected: '#666', color: '#fff', borderRadius: '2px', shapeBorder: '3px solid var(--SmartThemeQuoteColor)', shapeColor: '#444', shapeSelectedColor: '#aaa' },
-        },
-        galleryDisplayMode: 'pagination',
-        fnThumbnailOpen: viewWithDragbox,
-        fnThumbnailInit: function (/** @type {JQuery<HTMLElement>} */ $thumbnail, /** @type {{src: string}} */ item) {
-            if (!item?.src) return;
-            $thumbnail.attr('title', String(item.src).split('/').pop());
-        },
-    });
+// Old initGallery, no longer directly used for iframe gallery
+async function initGallery_OLD(items, url) {
+    // const nonce = `nonce-${Math.random().toString(36).substring(2, 15)}`;
+    // const gallery = $('#dragGallery');
+    // gallery.addClass(nonce);
+    // gallery.nanogallery2({
+    //     'items': items,
+    //     thumbnailWidth: 'auto',
+    //     thumbnailHeight: thumbnailHeight,
+    //     // ... other options ...
+    //     fnThumbnailOpen: viewWithDragbox,
+    //     fnThumbnailInit: function ($thumbnail, item) {
+    //         if (!item?.src) return;
+    //         $thumbnail.attr('title', String(item.src).split('/').pop());
+    //     },
+    // });
 
-    const dragDropHandler = new DragAndDropHandler(`#dragGallery.${nonce}`, async (files) => {
-        if (!Array.isArray(files) || files.length === 0) {
+    // const dragDropHandler = new DragAndDropHandler(`#dragGallery.${nonce}`, async (files) => {
+    //     // ... old D&D logic ...
+    // });
+
+    // const resizeHandler = function () {
+    //     gallery.nanogallery2('resize');
+    // };
+    // eventSource.on('resizeUI', resizeHandler);
+    // eventSource.once(event_types.CHAT_CHANGED, function () {
+    //     gallery.closest('#gallery').remove();
+    // });
+    // eventSource.once(CUSTOM_GALLERY_REMOVED_EVENT, function () {
+    //     gallery.nanogallery2('destroy');
+    //     // dragDropHandler.destroy(); // dragDropHandler is local, would be GC'd
+    //     eventSource.removeListener('resizeUI', resizeHandler);
+    // });
+    // gallery.css('height', gallery.parent().css('height'));
+    // await delay(100);
+    // gallery.css('height', 'unset');
+}
+
+
+async function showCharGallery(urlOverride) {
+    try {
+        let url;
+        if (urlOverride) {
+            url = urlOverride;
+        } else {
+            url = selected_group || this_chid;
+            if (!selected_group && typeof this_chid !== 'undefined' && characters[this_chid]) {
+                 url = getGalleryFolder(characters[this_chid]);
+            } else if (selected_group) {
+                url = selected_group;
+            } else {
+                console.warn('Gallery URL could not be determined.');
+                toastr.warning('Could not determine gallery folder.');
+                return;
+            }
+        }
+
+        if (!url) {
+            console.error("Gallery URL is undefined. Cannot show gallery.");
+            toastr.error("Gallery folder context is missing.");
             return;
         }
 
-        // Upload each file
-        for (const file of files) {
-            await uploadFile(file, url);
-        }
-
-        // Refresh the gallery
-        const newItems = await getGalleryItems(url);
-        $('#dragGallery').closest('#gallery').remove();
-        await makeMovable(url);
-        await delay(100);
-        await initGallery(newItems, url);
-    });
-
-    const resizeHandler = function () {
-        gallery.nanogallery2('resize');
-    };
-
-    eventSource.on('resizeUI', resizeHandler);
-
-    eventSource.once(event_types.CHAT_CHANGED, function () {
-        gallery.closest('#gallery').remove();
-    });
-
-    eventSource.once(CUSTOM_GALLERY_REMOVED_EVENT, function () {
-        gallery.nanogallery2('destroy');
-        dragDropHandler.destroy();
-        eventSource.removeListener('resizeUI', resizeHandler);
-    });
-
-    // Set dropzone height to be the same as the parent
-    gallery.css('height', gallery.parent().css('height'));
-
-    //let images populate first
-    await delay(100);
-    //unset the height (which must be getting set by the gallery library at some point)
-    gallery.css('height', 'unset');
-    //force a resize to make images display correctly
-    gallery.nanogallery2('resize');
-}
-
-/**
- * Displays a character gallery using the nanogallery2 library.
- *
- * This function takes care of:
- * - Loading necessary resources for the gallery on the first invocation.
- * - Preparing gallery items based on the character or group selection.
- * - Handling the drag-and-drop functionality for image upload.
- * - Displaying the gallery in a popup.
- * - Cleaning up resources when the gallery popup is closed.
- *
- * @returns {Promise<void>} - Promise representing the completion of the gallery display process.
- */
-async function showCharGallery() {
-    // Load necessary files if it's the first time calling the function
-    if (firstTime) {
-        await loadFileToDocument(
-            `${extensionFolderPath}nanogallery2.woff.min.css`,
-            'css',
-        );
-        await loadFileToDocument(
-            `${extensionFolderPath}jquery.nanogallery2.min.js`,
-            'js',
-        );
-        firstTime = false;
-        toastr.info('Images can also be found in the folder `user/images`', 'Drag and drop images onto the gallery to upload them', { timeOut: 6000 });
-    }
-
-    try {
-        let url = selected_group || this_chid;
-        if (!selected_group && this_chid !== undefined) {
-            url = getGalleryFolder(characters[this_chid]);
-        }
-
+        console.log(`[Parent] Showing gallery for URL: ${url}`);
         const items = await getGalleryItems(url);
-        // if there already is a gallery, destroy it and place this one in its place
-        $('#dragGallery').closest('#gallery').remove();
-        await makeMovable(url);
-        await delay(100);
-        await initGallery(items, url);
+
+        const galleryPanelSelector = EXTENSION_UI_PANELS && EXTENSION_UI_PANELS['gallery'] ? EXTENSION_UI_PANELS['gallery'] : '#gallery';
+        let galleryPanel = document.querySelector(galleryPanelSelector);
+
+        if (!galleryPanel) {
+             await makeMovable(url);
+             galleryPanel = document.querySelector(galleryPanelSelector);
+        } else {
+            // If panel exists, we might need to update its title or other URL-dependent parts.
+            // For now, makeMovable is called to handle this. It should be idempotent or updatable.
+            await makeMovable(url);
+        }
+
+        if (galleryPanel) {
+            const iframe = galleryPanel.querySelector('iframe');
+            if (iframe && iframe.contentWindow) {
+                console.log('[Parent] Posting initGallery message to iframe with items:', items.length);
+                iframe.contentWindow.postMessage({ type: 'initGallery', items: items, url: url }, '*');
+            } else {
+                console.error('[Parent] Gallery iframe not found or not ready in panel:', galleryPanelSelector);
+            }
+        } else {
+             console.error('[Parent] Gallery panel container not found:', galleryPanelSelector);
+        }
+
     } catch (err) {
         console.trace();
-        console.error(err);
+        console.error('[Parent] Error in showCharGallery:', err);
+        toastr.error('Failed to display gallery.');
     }
 }
 
-/**
- * Uploads a given file to a specified URL.
- * Once the file is uploaded, it provides a success message using toastr,
- * destroys the existing gallery, fetches the latest items, and reinitializes the gallery.
- *
- * @param {File} file - The file object to be uploaded.
- * @param {string} url - The URL indicating where the file should be uploaded.
- * @returns {Promise<void>} - Promise representing the completion of the file upload and gallery refresh.
- */
 async function uploadFile(file, url) {
     try {
-        // Convert the file to a base64 string
         const base64Data = await getBase64Async(file);
-
-        // Create the payload
-        const payload = {
-            image: base64Data,
-            ch_name: url,
-        };
-
+        const payload = { image: base64Data, ch_name: url };
         const response = await fetch('/api/images/upload', {
             method: 'POST',
             headers: getRequestHeaders(),
@@ -322,162 +248,168 @@ async function uploadFile(file, url) {
         if (!response.ok) {
             throw new Error(`HTTP error! Status: ${response.status}`);
         }
-
         const result = await response.json();
-
-        toastr.success(t`File uploaded successfully. Saved at: ${result.path}`);
+        // toastr.success(t`File uploaded successfully. Saved at: ${result.path}`); // Done by parent
+        return result; // Return result for Promise.all
     } catch (error) {
-        console.error('There was an issue uploading the file:', error);
-
-        // Replacing alert with toastr error notification
-        toastr.error(t`Failed to upload the file.`);
+        console.error('[Parent] There was an issue uploading the file:', error);
+        toastr.error(t`Failed to upload the file: ${file.name}`);
+        throw error; // Re-throw to be caught by Promise.all
     }
 }
 
-/**
- * Creates a new draggable container based on a template.
- * This function takes a template with the ID 'generic_draggable_template' and clones it.
- * The cloned element has its attributes set, a new child div appended, and is made visible on the body.
- * Additionally, it sets up the element to prevent dragging on its images.
- * @param {string} url - The URL of the image source.
- * @returns {Promise<void>} - Promise representing the completion of the draggable container creation.
- */
 async function makeMovable(url) {
-    console.debug('making new container from template');
-    const id = 'gallery';
-    const template = $('#generic_draggable_template').html();
-    const newElement = $(template);
+    console.debug('[Parent] makeMovable called with URL:', url);
+    const id = 'gallery'; // This is the ID for EXTENSION_UI_PANELS['gallery']
+
+    let newElement = $(`#${id}`);
+    if (!newElement.length) {
+        const template = $('#generic_draggable_template').html();
+        newElement = $(template);
+        newElement.attr('id', id);
+        newElement.find('.drag-grabber').attr('id', `${id}header`);
+        // Add no-scrollbar class to this element for iframe host
+        newElement.addClass('no-scrollbar');
+        $('#movingDivs').append(newElement);
+        dragElement(newElement);
+    }
+
+    // Update title and folder input regardless of whether it's new or existing
     newElement.css('background-color', 'var(--SmartThemeBlurTintColor)');
-    newElement.attr('forChar', id);
-    newElement.attr('id', id);
-    newElement.find('.drag-grabber').attr('id', `${id}header`);
+    newElement.attr('forChar', id); // Keep this for consistency if other logic uses it
+
     const dragTitle = newElement.find('.dragTitle');
-    dragTitle.addClass('flex-container justifySpaceBetween alignItemsBaseline');
+    if (!dragTitle.length) { // Should not happen if template is correct
+        console.error("Drag title not found in makeMovable");
+        return;
+    }
+    dragTitle.empty().addClass('flex-container justifySpaceBetween alignItemsBaseline');
+
     const titleText = document.createElement('span');
     titleText.textContent = t`Image Gallery`;
     dragTitle.append(titleText);
+
     const sortSelect = document.createElement('select');
     sortSelect.classList.add('gallery-sort-select');
-
     for (const sort of Object.values(SORT)) {
         const option = document.createElement('option');
         option.value = sort.value;
         option.textContent = sort.label;
         sortSelect.appendChild(option);
     }
-
+    sortSelect.value = getSortOrder();
     sortSelect.addEventListener('change', async () => {
         const selectedOption = sortSelect.options[sortSelect.selectedIndex].value;
         setSortOrder(selectedOption);
-        closeButton.trigger('click');
-        await showCharGallery();
+        // Refresh gallery via iframe
+        const galleryContainer = document.querySelector(`#${id}`);
+        if (galleryContainer) {
+            const iframe = galleryContainer.querySelector('iframe');
+            if (iframe && iframe.contentWindow) {
+                const currentGalleryUrl = galleryContainer.querySelector('.gallery-folder-input')?.value || url;
+                const items = await getGalleryItems(currentGalleryUrl);
+                iframe.contentWindow.postMessage({ type: 'initGallery', items: items, url: currentGalleryUrl }, '*');
+            }
+        }
     });
-
-    sortSelect.value = getSortOrder();
     dragTitle.append(sortSelect);
 
-    // add no-scrollbar class to this element
-    newElement.addClass('no-scrollbar');
-
-    // get the close button and set its id and data-related-id
     const closeButton = newElement.find('.dragClose');
     closeButton.attr('id', `${id}close`);
     closeButton.attr('data-related-id', `${id}`);
 
-    const topBarElement = document.createElement('div');
-    topBarElement.classList.add('flex-container', 'alignItemsCenter');
+    let topBarElement = newElement.find('.gallery-topbar');
+    if (!topBarElement.length) {
+        topBarElement = $('<div>').addClass('gallery-topbar flex-container alignItemsCenter');
+        newElement.find('.drag-grabber').after(topBarElement); // Insert after header
+    }
+    topBarElement.empty();
 
-    const onChangeFolder = async (/** @type {Event} */ e) => {
-        if (e instanceof KeyboardEvent && e.key !== 'Enter') {
+    const galleryFolderInput = $('<input type="text" class="text_pole gallery-folder-input flex1">')
+        .attr('placeholder', t`Folder Name`)
+        .attr('title', t`Enter a folder name to change the gallery folder`)
+        .val(url);
+
+    const onChangeFolder = async (e) => {
+        if (e instanceof KeyboardEvent && e.key !== 'Enter' && e.type !== 'click') {
             return;
         }
-
         try {
-            const newUrl = await getSanitizedFilename(galleryFolderInput.value);
+            const newUrl = await getSanitizedFilename(galleryFolderInput.val());
             updateGalleryFolder(newUrl);
-            closeButton.trigger('click');
-            await showCharGallery();
+            // Refresh gallery via iframe
+            const galleryContainer = document.querySelector(`#${id}`);
+            if (galleryContainer) {
+                const iframe = galleryContainer.querySelector('iframe');
+                if (iframe && iframe.contentWindow) {
+                    const items = await getGalleryItems(newUrl);
+                    iframe.contentWindow.postMessage({ type: 'initGallery', items: items, url: newUrl }, '*');
+                }
+            }
             toastr.info(t`Gallery folder changed to ${newUrl}`);
-            galleryFolderInput.value = newUrl;
+            galleryFolderInput.val(newUrl);
         } catch (error) {
             console.error('Failed to change gallery folder:', error);
             toastr.error(error?.message || t`Unknown error`, t`Failed to change gallery folder`);
         }
     };
+    galleryFolderInput.on('keyup', onChangeFolder);
 
-    const onRestoreFolder = async () => {
-        try {
-            restoreGalleryFolder();
-            closeButton.trigger('click');
-            await showCharGallery();
-        } catch (error) {
-            console.error('Failed to restore gallery folder:', error);
-            toastr.error(error?.message || t`Unknown error`, t`Failed to restore gallery folder`);
-        }
-    };
+    const galleryFolderAccept = $('<div>').addClass('right_menu_button fa-solid fa-check fa-fw')
+        .attr('title', t`Change gallery folder`)
+        .on('click', onChangeFolder);
 
-    const galleryFolderInput = document.createElement('input');
-    galleryFolderInput.type = 'text';
-    galleryFolderInput.placeholder = t`Folder Name`;
-    galleryFolderInput.title = t`Enter a folder name to change the gallery folder`;
-    galleryFolderInput.value = url;
-    galleryFolderInput.classList.add('text_pole', 'gallery-folder-input', 'flex1');
-    galleryFolderInput.addEventListener('keyup', onChangeFolder);
+    const galleryFolderRestore = $('<div>').addClass('right_menu_button fa-solid fa-recycle fa-fw')
+        .attr('title', t`Restore gallery folder`)
+        .on('click', async () => {
+            try {
+                restoreGalleryFolder();
+                const defaultFolder = getGalleryFolder(characters[this_chid]); // Re-fetch default after restore
+                 // Refresh gallery via iframe
+                const galleryContainer = document.querySelector(`#${id}`);
+                if (galleryContainer) {
+                    const iframe = galleryContainer.querySelector('iframe');
+                    if (iframe && iframe.contentWindow) {
+                        const items = await getGalleryItems(defaultFolder);
+                        iframe.contentWindow.postMessage({ type: 'initGallery', items: items, url: defaultFolder }, '*');
+                    }
+                }
+                galleryFolderInput.val(defaultFolder);
+            } catch (error) {
+                console.error('Failed to restore gallery folder:', error);
+                toastr.error(error?.message || t`Unknown error`, t`Failed to restore gallery folder`);
+            }
+        });
 
-    const galleryFolderAccept = document.createElement('div');
-    galleryFolderAccept.classList.add('right_menu_button', 'fa-solid', 'fa-check', 'fa-fw');
-    galleryFolderAccept.title = t`Change gallery folder`;
-    galleryFolderAccept.addEventListener('click', onChangeFolder);
+    topBarElement.append(galleryFolderInput, galleryFolderAccept, galleryFolderRestore);
 
-    const galleryFolderRestore = document.createElement('div');
-    galleryFolderRestore.classList.add('right_menu_button', 'fa-solid', 'fa-recycle', 'fa-fw');
-    galleryFolderRestore.title = t`Restore gallery folder`;
-    galleryFolderRestore.addEventListener('click', onRestoreFolder);
-
-    topBarElement.appendChild(galleryFolderInput);
-    topBarElement.appendChild(galleryFolderAccept);
-    topBarElement.appendChild(galleryFolderRestore);
-    newElement.append(topBarElement);
-
-    // Populate the gallery folder input with a list of available folders
     const folders = await getGalleryFolders();
-    $(galleryFolderInput)
-        .autocomplete({
-            source: (i, o) => {
-                const term = i.term.toLowerCase();
-                const filtered = folders.filter(f => f.toLowerCase().includes(term));
-                o(filtered);
-            },
-            select: (e, u) => {
-                galleryFolderInput.value = u.item.value;
-                onChangeFolder(e);
-            },
-            minLength: 0,
-        })
-        .on('focus', () => $(galleryFolderInput).autocomplete('search', ''));
+    galleryFolderInput.autocomplete({
+        source: (i, o) => {
+            const term = i.term.toLowerCase();
+            const filtered = folders.filter(f => f.toLowerCase().includes(term));
+            o(filtered);
+        },
+        select: (e, u) => {
+            galleryFolderInput.val(u.item.value);
+            onChangeFolder(e);
+        },
+        minLength: 0,
+    }).on('focus', () => galleryFolderInput.autocomplete('search', ''));
 
-    //add a div for the gallery
-    newElement.append('<div id="dragGallery"></div>');
+    // The div for nanogallery2 instance is now inside the iframe.
+    // This function only creates the parent draggable window.
+    // Ensure the iframe container part of the draggable window is ready if it's not already part of the template.
+    if (!newElement.find(`#${id}_iframe_content_wrapper`).length) {
+         newElement.append(`<div id="${id}_iframe_content_wrapper" style="width:100%; height:calc(100% - 60px); overflow:hidden;"></div>`);
+    }
 
-    $('#dragGallery').css('display', 'block');
-
-    $('#movingDivs').append(newElement);
 
     loadMovingUIState();
     $(`.draggable[forChar="${id}"]`).css('display', 'block');
-    dragElement(newElement);
-
-    $(`.draggable[forChar="${id}"] img`).on('dragstart', (e) => {
-        console.log('saw drag on avatar!');
-        e.preventDefault();
-        return false;
-    });
 }
 
-/**
- * Sets the gallery folder to a new URL.
- * @param {string} newUrl - The new URL to set for the gallery folder.
- */
+
 function updateGalleryFolder(newUrl) {
     if (!newUrl) {
         throw new Error('Folder name cannot be empty');
@@ -495,18 +427,13 @@ function updateGalleryFolder(newUrl) {
         throw new Error('Character PNG ID is not found');
     }
     if (newUrl === name) {
-        // Default folder name is picked, remove the override
         delete context.extensionSettings.gallery.folders[avatar];
     } else {
-        // Custom folder name is provided, set the override
         context.extensionSettings.gallery.folders[avatar] = newUrl;
     }
     context.saveSettingsDebounced();
 }
 
-/**
- * Restores the gallery folder to the default value.
- */
 function restoreGalleryFolder() {
     const context = SillyTavern.getContext();
     if (context.groupId) {
@@ -527,122 +454,48 @@ function restoreGalleryFolder() {
     context.saveSettingsDebounced();
 }
 
-/**
- * Creates a new draggable image based on a template.
- *
- * This function clones a provided template with the ID 'generic_draggable_template',
- * appends the given image URL, ensures the element has a unique ID,
- * and attaches the element to the body. After appending, it also prevents
- * dragging on the appended image.
- *
- * @param {string} id - A base identifier for the new draggable element.
- * @param {string} url - The URL of the image to be added to the draggable element.
- */
 function makeDragImg(id, url) {
-    // Step 1: Clone the template content
     const template = document.getElementById('generic_draggable_template');
-
     if (!(template instanceof HTMLTemplateElement)) {
         console.error('The element is not a <template> tag');
         return;
     }
+    const newElementNode = document.importNode(template.content, true);
+    const newElement = $(newElementNode.children[0]); // Get the first child, which is the draggable div
 
-    const newElement = document.importNode(template.content, true);
-
-    // Step 2: Append the given image
     const imgElem = document.createElement('img');
     imgElem.src = url;
     let uniqueId = `draggable_${id}`;
-    const draggableElem = /** @type {HTMLElement} */ (newElement.querySelector('.draggable'));
-    if (draggableElem) {
-        draggableElem.appendChild(imgElem);
-
-        // Find a unique id for the draggable element
-
-        let counter = 1;
-        while (document.getElementById(uniqueId)) {
-            uniqueId = `draggable_${id}_${counter}`;
-            counter++;
-        }
-        draggableElem.id = uniqueId;
-
-        // Ensure that the newly added element is displayed as block
-        draggableElem.style.display = 'block';
-        //and has no padding unlike other non-zoomed-avatar draggables
-        draggableElem.style.padding = '0';
-
-        // Add an id to the close button
-        // If the close button exists, set related-id
-        const closeButton = /** @type {HTMLElement} */ (draggableElem.querySelector('.dragClose'));
-        if (closeButton) {
-            closeButton.id = `${uniqueId}close`;
-            closeButton.dataset.relatedId = uniqueId;
-        }
-
-        // Find the .drag-grabber and set its matching unique ID
-        const dragGrabber = draggableElem.querySelector('.drag-grabber');
-        if (dragGrabber) {
-            dragGrabber.id = `${uniqueId}header`; // appending _header to make it match the parent's unique ID
-        }
+    let counter = 1;
+    while (document.getElementById(uniqueId)) {
+        uniqueId = `draggable_${id}_${counter}`;
+        counter++;
     }
+    newElement.attr('id', uniqueId);
+    newElement.append(imgElem);
+    newElement.css('display', 'block').css('padding', '0');
+    newElement.find('.dragClose').attr({ 'id': `${uniqueId}close`, 'data-related-id': uniqueId });
+    newElement.find('.drag-grabber').attr('id', `${uniqueId}header`);
 
-    // Step 3: Attach it to the movingDivs container
-    document.getElementById('movingDivs').appendChild(newElement);
-
-    // Step 4: Call dragElement and loadMovingUIState
-    const appendedElement = document.getElementById(uniqueId);
-    if (appendedElement) {
-        var elmntName = $(appendedElement);
-        loadMovingUIState();
-        dragElement(elmntName);
-
-        // Prevent dragging the image
-        $(`#${uniqueId} img`).on('dragstart', (e) => {
-            console.log('saw drag on avatar!');
-            e.preventDefault();
-            return false;
-        });
-    } else {
-        console.error('Failed to append the template content or retrieve the appended content.');
-    }
+    $('#movingDivs').append(newElement);
+    loadMovingUIState();
+    dragElement(newElement);
+    newElement.find('img').on('dragstart', (e) => { e.preventDefault(); return false; });
 }
 
-/**
- * Sanitizes a given ID to ensure it can be used as an HTML ID.
- * This function replaces spaces and non-word characters with dashes.
- * It also removes any non-ASCII characters.
- * @param {string} id - The ID to be sanitized.
- * @returns {string} - The sanitized ID.
- */
 function sanitizeHTMLId(id) {
-    // Replace spaces and non-word characters
-    id = id.replace(/\s+/g, '-')
-        .replace(/[^\x00-\x7F]/g, '-')
-        .replace(/\W/g, '');
-
+    id = id.replace(/\s+/g, '-').replace(/[^\x00-\x7F]/g, '-').replace(/\W/g, '');
     return id;
 }
 
-/**
- * Processes a list of items (containing URLs) and creates a draggable box for the first item.
- *
- * If the provided list of items is non-empty, it takes the URL of the first item,
- * derives an ID from the URL, and uses the makeDragImg function to create
- * a draggable image element based on that ID and URL.
- *
- * @param {Array} items - A list of items where each item has a responsiveURL method that returns a URL.
- */
 function viewWithDragbox(items) {
     if (items && items.length > 0) {
-        const url = items[0].responsiveURL(); // Get the URL of the clicked image/video
-        // ID should just be the last part of the URL, removing the extension
+        const url = items[0].responsiveURL();
         const id = sanitizeHTMLId(url.substring(url.lastIndexOf('/') + 1, url.lastIndexOf('.')));
         makeDragImg(id, url);
     }
 }
 
-
-// Registers a simple command for opening the char gallery.
 SlashCommandParser.addCommandObject(SlashCommand.fromProps({
     name: 'show-gallery',
     aliases: ['sg'],
@@ -680,10 +533,8 @@ async function listGalleryCommand(args) {
         if (!args.char && !args.group && !selected_group && this_chid !== undefined) {
             url = getGalleryFolder(characters[this_chid]);
         }
-
         const items = await getGalleryItems(url);
         return JSON.stringify(items.map(it => it.src));
-
     } catch (err) {
         console.trace();
         console.error(err);
@@ -691,7 +542,6 @@ async function listGalleryCommand(args) {
     return JSON.stringify([]);
 }
 
-// On extension load, ensure the settings are initialized
 (function () {
     initSettings();
     eventSource.on(event_types.CHARACTER_RENAMED, (oldAvatar, newAvatar) => {
@@ -716,7 +566,6 @@ async function listGalleryCommand(args) {
         }
     });
 
-    // Add an option to the dropdown
     $('#char-management-dropdown').append(
         $('<option>', {
             id: 'show_char_gallery',
@@ -724,3 +573,9 @@ async function listGalleryCommand(args) {
         }),
     );
 })();
+
+// window.galleryViewWithDragbox = viewWithDragbox; // No longer needed, will be exported
+// window.galleryUploadFile = uploadFile; // No longer needed, will be exported
+// window.galleryShowCharGallery = showCharGallery; // No longer needed, will be exported
+
+export { viewWithDragbox, uploadFile, showCharGallery };
